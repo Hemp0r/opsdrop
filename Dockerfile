@@ -1,11 +1,14 @@
 ############################
 # Build stage
 ############################
-FROM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
-RUN apk add --no-cache ca-certificates upx
+RUN apk add --no-cache ca-certificates
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -17,10 +20,10 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags "-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}" \
     -o /out/opsdrop-server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags "-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}" \
     -o /out/opsdrop ./cmd/opsdrop
 
