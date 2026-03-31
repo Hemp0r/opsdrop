@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -80,4 +81,23 @@ func ensureDir(path string) error {
 		return nil
 	}
 	return os.MkdirAll(path, 0o755)
+}
+
+// LogSummary prints the active configuration (excluding secrets) to the given logger.
+func (c Config) LogSummary(l *log.Logger) {
+	l.Println("Configuration:")
+	l.Printf("  Address:              %s", c.Address)
+	l.Printf("  TLS enabled:          %v", c.TLSEnabled)
+	if c.TLSEnabled {
+		l.Printf("  TLS cert:             %s", c.TLSCertPath)
+		l.Printf("  TLS key:              %s", c.TLSKeyPath)
+	}
+	l.Printf("  Database:             %s", c.DatabasePath)
+	l.Printf("  Storage dir:          %s", c.StorageDir)
+	l.Printf("  Registration:         %v", c.RegistrationEnabled)
+	if c.MaxUploadSizeBytes > 0 {
+		l.Printf("  Max upload size:      %d bytes", c.MaxUploadSizeBytes)
+	} else {
+		l.Printf("  Max upload size:      unlimited")
+	}
 }

@@ -23,6 +23,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	cfg.LogSummary(log.Default())
 
 	database, err := db.New(cfg.DatabasePath)
 	if err != nil {
