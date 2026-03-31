@@ -42,6 +42,29 @@ OpsDrop is intentionally not:
 
 It solves one problem: ***fast, temporary data transfer***
 
+## Install opsdrop
+
+### Via script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Hemp0r/opsdrop/refs/heads/main/install.sh | sh
+```
+
+or
+
+```sh
+wget -qO- https://raw.githubusercontent.com/Hemp0r/opsdrop/refs/heads/main/install.sh | sh
+```
+
+### Via Homebrew
+
+```sh
+brew tap hemp0r/opsdrop
+brew install opsdrop
+```
+
+---
+
 ## Project Layout
 
 ```
