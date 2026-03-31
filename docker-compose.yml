@@ -1,0 +1,31 @@
+services:
+  opsdrop:
+    build:
+      context: .
+      args:
+        VERSION: "${VERSION:-dev}"
+        COMMIT: "${COMMIT:-unknown}"
+        DATE: "${DATE:-unknown}"
+    image: hemp0r/opsdrop:latest
+    container_name: opsdrop-server
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      # REQUIRED: override with a strong secret, e.g. via .env file or
+      # SERVER_JWT_SECRET=$(openssl rand -hex 32) docker compose up
+      SERVER_JWT_SECRET: "${SERVER_JWT_SECRET:?SERVER_JWT_SECRET must be set}"
+      SERVER_ADDRESS: ":8443"
+      SERVER_TLS_ENABLED: "false"
+      SERVER_DATABASE: "/data/server.db"
+      SERVER_STORAGE_DIR: "/data/storage" 
+      SERVER_TLS_CERT: "/certs/fullchain.pem"
+      SERVER_TLS_KEY: "/certs/privkey.pem"
+      REGISTRATION_ENABLED: "${REGISTRATION_ENABLED:-true}"
+      MAX_UPLOAD_SIZE_BYTES: "${MAX_UPLOAD_SIZE_BYTES:-0}"
+    volumes:
+      - opsdrop_data:/data
+      - ./certs:/certs:ro
+
+volumes:
+  opsdrop_data:

@@ -1,0 +1,16 @@
+bin/
+certs/
+dist/
+
+# Ignore all .env files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Ignore log files
+logs/
+*.log
+
+opsdrop
