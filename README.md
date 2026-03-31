@@ -95,8 +95,14 @@ The server reads environment variables (shown with defaults):
 | `SERVER_JWT_SECRET` | _(required)_ | HMAC secret for JWT signing (min 32 chars) |
 | `REGISTRATION_ENABLED` | `true` | Set `false` to disable self-service account registration |
 | `MAX_UPLOAD_SIZE_BYTES` | `0` (unlimited) | Maximum upload size in bytes; `0` means no limit |
+| `DEFAULT_PRIVATE_TTL` | `14d` | Default expiration time for private uploads (e.g., `7d`, `168h`) |
+| `MAX_PRIVATE_TTL` | `14d` | Maximum expiration time users can set for private uploads |
+| `DEFAULT_PUBLIC_TTL` | `48h` | Default expiration time for public uploads (e.g., `2d`, `48h`) |
+| `MAX_PUBLIC_TTL` | `48h` | Maximum expiration time users can set for public uploads |
 
 `SERVER_JWT_SECRET` **must** be supplied (e.g. using `openssl rand -hex 32`).
+
+For detailed information on expiration configuration, see [docs/EXPIRATION.md](docs/EXPIRATION.md).
 
 ### Server Capabilities
 
@@ -105,7 +111,8 @@ The server exposes `GET /.well-known/opsdrop-capabilities` (no auth required) wh
 - `auth_enabled`, `anonymous_uploads`, `private_uploads`, `public_shares`
 - `self_service_registration` (from `REGISTRATION_ENABLED`)
 - `max_upload_size_bytes` (from `MAX_UPLOAD_SIZE_BYTES`)
-- `default_ttl_seconds`, `max_ttl_seconds`
+- `default_ttl_seconds`, `max_ttl_seconds` (private upload expiration)
+- `default_public_ttl_seconds`, `max_public_ttl_seconds` (public upload expiration)
 
 The CLI fetches and caches these on `opsdrop remote set` and `opsdrop remote refresh` to improve help output and UX hints. Capabilities are never required for core push/pull operations.
 

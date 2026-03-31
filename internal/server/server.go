@@ -31,10 +31,6 @@ const (
 	machineHeader      = "X-Client-Machine"
 	maxUploadSizeBytes = 1 << 30 // 1 GiB
 	maxFormFieldSize   = 1 << 20 // 1 MiB for auxiliary form fields
-	publicFileTTL      = 48 * time.Hour
-	minPrivateDays     = 1
-	maxPrivateDays     = 14
-	defaultPrivateDays = 14
 	cleanupInterval    = time.Hour
 	headerEncrypted    = "X-Opsdrop-Encrypted"
 	headerSalt         = "X-Opsdrop-Salt"
@@ -285,8 +281,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"self_service_registration":        s.cfg.RegistrationEnabled,
 		"default_visibility_authenticated": "private",
 		"max_upload_size_bytes":            s.cfg.MaxUploadSizeBytes,
-		"default_ttl_seconds":              defaultPrivateDays * 86400,
-		"max_ttl_seconds":                  maxPrivateDays * 86400,
+		"default_ttl_seconds":              int64(s.cfg.DefaultPrivateTTL.Seconds()),
+		"max_ttl_seconds":                  int64(s.cfg.MaxPrivateTTL.Seconds()),
+		"default_public_ttl_seconds":       int64(s.cfg.DefaultPublicTTL.Seconds()),
+		"max_public_ttl_seconds":           int64(s.cfg.MaxPublicTTL.Seconds()),
 	}
 	writeJSON(w, http.StatusOK, caps)
 }
@@ -513,19 +511,43 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	isPublic := strings.ToLower(strings.TrimSpace(upload.Fields["public"])) == "true"
-	retentionDays := defaultPrivateDays
-	if v := strings.TrimSpace(upload.Fields["retention_days"]); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil {
-			retentionDays = clampInt(parsed, minPrivateDays, maxPrivateDays)
-		}
-	}
 
-	expiresAt := time.Now().UTC().Add(time.Duration(retentionDays) * 24 * time.Hour)
+	// Determine expiration based on whether the upload is public or private
+	var expiresAt time.Time
 	var publicToken *string
+
 	if isPublic {
-		expiresAt = time.Now().UTC().Add(publicFileTTL)
+		// Public uploads use public TTL settings
+		retentionTTL := s.cfg.DefaultPublicTTL
+		if v := strings.TrimSpace(upload.Fields["retention_days"]); v != "" {
+			// Support legacy retention_days field for public uploads
+			if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+				userTTL := time.Duration(parsed) * 24 * time.Hour
+				if userTTL <= s.cfg.MaxPublicTTL {
+					retentionTTL = userTTL
+				} else {
+					retentionTTL = s.cfg.MaxPublicTTL
+				}
+			}
+		}
+		expiresAt = time.Now().UTC().Add(retentionTTL)
 		token := uuid.New().String()
 		publicToken = &token
+	} else {
+		// Private uploads use private TTL settings
+		retentionTTL := s.cfg.DefaultPrivateTTL
+		if v := strings.TrimSpace(upload.Fields["retention_days"]); v != "" {
+			// Support retention_days field for backward compatibility
+			if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+				userTTL := time.Duration(parsed) * 24 * time.Hour
+				if userTTL <= s.cfg.MaxPrivateTTL {
+					retentionTTL = userTTL
+				} else {
+					retentionTTL = s.cfg.MaxPrivateTTL
+				}
+			}
+		}
+		expiresAt = time.Now().UTC().Add(retentionTTL)
 	}
 
 	saltValue := strings.TrimSpace(upload.Fields["encryption_salt"])
@@ -609,7 +631,20 @@ func (s *Server) handlePublicUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	expiresAt := time.Now().UTC().Add(publicFileTTL)
+	// Use configured default public TTL, allow override up to max
+	retentionTTL := s.cfg.DefaultPublicTTL
+	if v := strings.TrimSpace(upload.Fields["retention_days"]); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			userTTL := time.Duration(parsed) * 24 * time.Hour
+			if userTTL <= s.cfg.MaxPublicTTL {
+				retentionTTL = userTTL
+			} else {
+				retentionTTL = s.cfg.MaxPublicTTL
+			}
+		}
+	}
+
+	expiresAt := time.Now().UTC().Add(retentionTTL)
 	token := uuid.New().String()
 	saltValue := strings.TrimSpace(upload.Fields["encryption_salt"])
 	nonceValue := strings.TrimSpace(upload.Fields["encryption_nonce"])
