@@ -1,0 +1,29 @@
+OpsDrop has been deployed.
+{{- if .Values.ingress.enabled }}
+
+Access the application at:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+
+Make sure your Ingress controller and TLS certificates are properly configured.
+{{- else }}
+
+To access OpsDrop, set up port forwarding:
+
+  kubectl port-forward svc/{{ include "opsdrop.fullname" . }} 8080:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+
+Then visit http://localhost:8080
+{{- end }}
+
+{{- if not .Values.existingSecret }}
+{{- if not .Values.config.jwtSecret }}
+
+WARNING: No JWT secret was provided. You must create a secret before the pod
+will start:
+
+  kubectl create secret generic {{ include "opsdrop.fullname" . }} \
+    --from-literal=jwt-secret="$(openssl rand -hex 32)" \
+    -n {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: opsdrop
+description: Secure file and clipboard sharing across devices
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - file-sharing
+  - clipboard
+  - ops
+home: https://github.com/hemp0r/opsdrop
+maintainers:
+  - name: hemp0r

@@ -1,0 +1,86 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/hemp0r/opsdrop
+  tag: "stable"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Existing secret containing the JWT signing key.
+# The secret must have a key named `jwt-secret` with at least 32 characters.
+# If empty, a secret is created from `config.jwtSecret`.
+existingSecret: ""
+
+config:
+  # -- JWT signing key. Ignored when existingSecret is set.
+  # Generate with: openssl rand -hex 32
+  jwtSecret: ""
+  # -- Allow public account registration.
+  registrationEnabled: true
+  # -- Maximum upload size in bytes. 0 means unlimited.
+  maxUploadSizeBytes: 0
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-body-size: "1000m"
+    # nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+  hosts:
+    - host: opsdrop.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: opsdrop-tls
+  #    hosts:
+  #      - opsdrop.example.com
+
+persistence:
+  enabled: true
+  # -- Storage class. Empty string uses the cluster default.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  # -- Use an existing PVC instead of creating one.
+  existingClaim: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+networkPolicy:
+  enabled: true
+  # -- Additional ingress rules (e.g. monitoring scrapers).
+  additionalIngress: []
+  # -- Additional egress rules. By default all egress is denied.
+  additionalEgress: []
