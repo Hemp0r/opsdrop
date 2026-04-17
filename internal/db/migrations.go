@@ -58,6 +58,7 @@ func addChecksumColumn(ctx context.Context, conn *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pragma iteration: %w", err)
 	}
+	rows.Close()
 	if hasColumn {
 		return nil
 	}
@@ -109,6 +110,7 @@ func addExpiresAtColumn(ctx context.Context, conn *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pragma iteration: %w", err)
 	}
+	rows.Close()
 	if hasColumn {
 		return nil
 	}
@@ -147,6 +149,7 @@ func relaxUserIDNull(ctx context.Context, conn *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pragma iteration: %w", err)
 	}
+	rows.Close()
 
 	if userIDAllowsNull {
 		return nil
@@ -222,6 +225,7 @@ func addEncryptionColumns(ctx context.Context, conn *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pragma iteration: %w", err)
 	}
+	rows.Close()
 
 	for name, stmt := range required {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
@@ -259,6 +263,7 @@ func mergeClipboardIntoFiles(ctx context.Context, conn *sql.DB) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("pragma iteration: %w", err)
 	}
+	rows.Close()
 
 	if !hasEntryType {
 		if _, err := conn.ExecContext(ctx, `ALTER TABLE files ADD COLUMN entry_type TEXT NOT NULL DEFAULT 'file'`); err != nil {
