@@ -112,24 +112,27 @@ func newRemoteSetCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg.RemoteURL = strings.TrimRight(rawURL, "/")
+
+			// Build a probe config without persisting anything yet so we can
+			// verify the candidate remote actually speaks the OpsDrop protocol.
+			probe := *cfg
+			probe.RemoteURL = strings.TrimRight(rawURL, "/")
 			if insecure || client.Insecure {
-				cfg.SkipTLSVerify = true
-			}
-			if err := client.SaveConfig(cfg); err != nil {
-				return err
+				probe.SkipTLSVerify = true
 			}
 
-			// Try to fetch capabilities (best-effort).
-			c := client.New(cfg)
+			// Capabilities are how we confirm the target is an OpsDrop server.
+			// If they can't be fetched, refuse to switch the remote.
+			c := client.New(&probe)
 			caps, capErr := c.FetchCapabilities(context.Background())
 			if capErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: remote saved but capabilities could not be fetched: %v\n", capErr)
-				return printJSON(map[string]any{
-					"status":       "ok",
-					"remote":       cfg.RemoteURL,
-					"capabilities": "unavailable",
-				})
+				return fmt.Errorf("refusing to set remote: %s does not appear to be an OpsDrop server (capability check failed: %w)", probe.RemoteURL, capErr)
+			}
+
+			cfg.RemoteURL = probe.RemoteURL
+			cfg.SkipTLSVerify = probe.SkipTLSVerify
+			if err := client.SaveConfig(cfg); err != nil {
+				return err
 			}
 			if err := client.SaveCapabilities(cfg, caps); err != nil {
 				return err

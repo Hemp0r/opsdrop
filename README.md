@@ -114,7 +114,7 @@ The server exposes `GET /.well-known/opsdrop-capabilities` (no auth required) wh
 - `default_ttl_seconds`, `max_ttl_seconds` (private upload expiration)
 - `default_public_ttl_seconds`, `max_public_ttl_seconds` (public upload expiration)
 
-The CLI fetches and caches these on `opsdrop remote set` and `opsdrop remote refresh` to improve help output and UX hints. Capabilities are never required for core push/pull operations.
+The CLI fetches and caches these on `opsdrop remote set` and `opsdrop remote refresh` to improve help output and UX hints. `opsdrop remote set` requires this endpoint to respond successfully — if capabilities cannot be fetched, the new remote URL is rejected and the existing configuration is left unchanged, since a server that doesn't expose this endpoint is not a compatible OpsDrop remote.
 
 ### Self-signed certificate (development)
 
