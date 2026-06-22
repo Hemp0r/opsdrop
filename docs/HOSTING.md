@@ -68,10 +68,11 @@ reach the application:
 | `GET /public/*` | 30 req/min per IP | Prevent public-link abuse |
 | `/mcp` | 60 req/min per IP | MCP tooling — allows anonymous uploads, but a single session needs several requests (handshake + tool calls), so keep headroom |
 
-The `/mcp` endpoint accepts anonymous uploads like `POST /api/v1/public/files`,
-but is **not** covered by the application's per-IP upload limiter: the Streamable
-HTTP handshake issues several JSON-RPC POSTs per session, so a tight per-request
-cap would break normal use. Apply a moderate proxy-level limit instead.
+The `/mcp` endpoint accepts anonymous uploads like `POST /api/v1/public/files`.
+It is **not** covered by the strict 5/min upload limiter — the Streamable HTTP
+handshake issues several JSON-RPC POSTs per session, so a tight per-request cap
+would break normal use — but the application does apply a dedicated moderate
+limiter (60/min per IP) to it. The proxy-level limit above is defense-in-depth.
 
 #### nginx example
 

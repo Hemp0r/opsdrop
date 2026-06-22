@@ -48,6 +48,7 @@ type Server struct {
 	storageDir    string
 	authLimiter   *rateLimiter
 	uploadLimiter *rateLimiter
+	mcpLimiter    *rateLimiter
 }
 
 // New builds a server instance ready to serve requests.
@@ -59,6 +60,10 @@ func New(cfg config.Config, database *db.Database) *Server {
 		storageDir:    cfg.StorageDir,
 		authLimiter:   newRateLimiter(10, time.Minute),
 		uploadLimiter: newRateLimiter(5, time.Minute),
+		// /mcp allows anonymous uploads but needs several requests per session
+		// (Streamable HTTP handshake + tool calls), so it gets a moderate limit
+		// rather than the strict uploadLimiter. See docs/adr/0001.
+		mcpLimiter: newRateLimiter(60, time.Minute),
 	}
 	s.router = s.buildRouter()
 	go s.startCleanupLoop()
@@ -86,7 +91,7 @@ func storageSubdir(userID *int64) string {
 }
 
 func (s *Server) consumeUpload(w http.ResponseWriter, r *http.Request, subdir string) (*uploadData, error) {
-	limitedBody := http.MaxBytesReader(w, r.Body, maxUploadSizeBytes+1<<20)
+	limitedBody := http.MaxBytesReader(w, r.Body, s.maxUploadSize()+1<<20)
 	defer limitedBody.Close()
 	r.Body = limitedBody
 
@@ -353,8 +358,9 @@ func (s *Server) buildRouter() chi.Router {
 
 	// MCP endpoint (Streamable HTTP). Uses xferTimeout (context deadline only) —
 	// never middleware.Timeout, which buffers the response body and would break
-	// the streaming transport.
-	r.With(xferTimeout).Handle("/mcp", s.mcpHandler())
+	// the streaming transport. mcpLimiter gives anonymous-upload protection with
+	// enough headroom for the multi-request handshake.
+	r.With(s.mcpLimiter.middleware, xferTimeout).Handle("/mcp", s.mcpHandler())
 	return r
 }
 
@@ -366,7 +372,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"public_shares":                    true,
 		"self_service_registration":        s.cfg.RegistrationEnabled,
 		"default_visibility_authenticated": "private",
-		"max_upload_size_bytes":            s.cfg.MaxUploadSizeBytes,
+		"max_upload_size_bytes":            s.maxUploadSize(),
 		"default_ttl_seconds":              int64(s.cfg.DefaultPrivateTTL.Seconds()),
 		"max_ttl_seconds":                  int64(s.cfg.MaxPrivateTTL.Seconds()),
 		"default_public_ttl_seconds":       int64(s.cfg.DefaultPublicTTL.Seconds()),
@@ -602,7 +608,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	upload, err := s.consumeUpload(w, r, storageSubdir(&user.ID))
 	if err != nil {
 		if isRequestTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "file exceeds 1GB limit")
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds the %d byte upload limit", s.maxUploadSize()))
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -723,7 +729,7 @@ func (s *Server) handlePublicUpload(w http.ResponseWriter, r *http.Request) {
 	upload, err := s.consumeUpload(w, r, storageSubdir(nil))
 	if err != nil {
 		if isRequestTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "file exceeds 1GB limit")
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds the %d byte upload limit", s.maxUploadSize()))
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())

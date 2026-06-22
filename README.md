@@ -94,7 +94,7 @@ The server reads environment variables (shown with defaults):
 | `SERVER_STORAGE_DIR` | `data/storage` | Directory for uploaded files |
 | `SERVER_JWT_SECRET` | _(required)_ | HMAC secret for JWT signing (min 32 chars) |
 | `REGISTRATION_ENABLED` | `true` | Set `false` to disable self-service account registration |
-| `MAX_UPLOAD_SIZE_BYTES` | `0` (unlimited) | Maximum upload size in bytes; `0` means no limit |
+| `MAX_UPLOAD_SIZE_BYTES` | `0` | Maximum upload size in bytes; `0` uses the built-in default cap (1 GiB). Set a value to raise or lower it. |
 | `DEFAULT_PRIVATE_TTL` | `14d` | Default expiration time for private uploads (e.g., `7d`, `168h`) |
 | `MAX_PRIVATE_TTL` | `14d` | Maximum expiration time users can set for private uploads |
 | `DEFAULT_PUBLIC_TTL` | `48h` | Default expiration time for public uploads (e.g., `2d`, `48h`) |
@@ -224,6 +224,10 @@ opsdrop ui                                         # requires login
 The server exposes a [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` (Streamable HTTP) so AI agents can create drops directly. It runs inside the same server binary as the REST API. A `push` tool uploads inline content; with a bearer token the drop is private, otherwise it is an anonymous public share.
 
 See [docs/MCP.md](docs/MCP.md) for the tool schema, client configuration, and a raw protocol walkthrough.
+
+## Architecture Decisions
+
+Non-obvious design decisions are recorded as [Architecture Decision Records](docs/adr/) in `docs/adr/`.
 
 ## Auditing
 

@@ -150,17 +150,30 @@ func clampTTL(retentionDays int, def, max time.Duration) time.Duration {
 
 // requestBaseURL reconstructs the externally visible base URL for a request,
 // honoring the common reverse-proxy forwarding headers the server sits behind.
+// Forwarded headers may be comma-separated proxy chains, so only the first entry
+// is used and a forwarded scheme is accepted only if it is http or https —
+// otherwise we fall back to the scheme derived from the connection.
 func requestBaseURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	if proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); proto != "" {
+	if proto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto")); proto == "http" || proto == "https" {
 		scheme = proto
 	}
 	host := r.Host
-	if fwd := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); fwd != "" {
+	if fwd := firstForwardedValue(r.Header.Get("X-Forwarded-Host")); fwd != "" {
 		host = fwd
 	}
 	return scheme + "://" + host
+}
+
+// firstForwardedValue returns the trimmed, lower-cased first entry of a possibly
+// comma-separated forwarding header (e.g. "https, http" -> "https").
+func firstForwardedValue(header string) string {
+	first := header
+	if idx := strings.IndexByte(header, ','); idx >= 0 {
+		first = header[:idx]
+	}
+	return strings.ToLower(strings.TrimSpace(first))
 }

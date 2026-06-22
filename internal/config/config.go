@@ -182,7 +182,7 @@ func (c Config) LogSummary(l *log.Logger) {
 	if c.MaxUploadSizeBytes > 0 {
 		l.Printf("  Max upload size:      %d bytes", c.MaxUploadSizeBytes)
 	} else {
-		l.Printf("  Max upload size:      unlimited")
+		l.Printf("  Max upload size:      server default cap (set MAX_UPLOAD_SIZE_BYTES to override)")
 	}
 	l.Printf("  Default private TTL:  %s", formatDuration(c.DefaultPrivateTTL))
 	l.Printf("  Max private TTL:      %s", formatDuration(c.MaxPrivateTTL))
