@@ -48,6 +48,7 @@ type Server struct {
 	storageDir    string
 	authLimiter   *rateLimiter
 	uploadLimiter *rateLimiter
+	mcpLimiter    *rateLimiter
 }
 
 // New builds a server instance ready to serve requests.
@@ -59,6 +60,10 @@ func New(cfg config.Config, database *db.Database) *Server {
 		storageDir:    cfg.StorageDir,
 		authLimiter:   newRateLimiter(10, time.Minute),
 		uploadLimiter: newRateLimiter(5, time.Minute),
+		// /mcp allows anonymous uploads but needs several requests per session
+		// (Streamable HTTP handshake + tool calls), so it gets a moderate limit
+		// rather than the strict uploadLimiter. See docs/adr/0001.
+		mcpLimiter: newRateLimiter(60, time.Minute),
 	}
 	s.router = s.buildRouter()
 	go s.startCleanupLoop()
@@ -86,7 +91,7 @@ func storageSubdir(userID *int64) string {
 }
 
 func (s *Server) consumeUpload(w http.ResponseWriter, r *http.Request, subdir string) (*uploadData, error) {
-	limitedBody := http.MaxBytesReader(w, r.Body, maxUploadSizeBytes+1<<20)
+	limitedBody := http.MaxBytesReader(w, r.Body, s.maxUploadSize()+1<<20)
 	defer limitedBody.Close()
 	r.Body = limitedBody
 
@@ -164,6 +169,87 @@ func (s *Server) consumeUpload(w http.ResponseWriter, r *http.Request, subdir st
 		Size:       size,
 		Checksum:   checksum,
 		Fields:     fields,
+	}, nil
+}
+
+// storeDrop persists an in-memory blob as a drop, mirroring the persistence half
+// of consumeUpload/handlePublicUpload for callers (such as the MCP endpoint) that
+// already hold the bytes. A nil userID stores under the public subdir; isPublic
+// mints a public token. It returns the same fileResponse shape as the REST
+// handlers. Drops created this way are never server-tracked as encrypted.
+func (s *Server) storeDrop(ctx context.Context, userID *int64, filename string, data []byte, isPublic bool, ttl time.Duration, machine string) (fileResponse, error) {
+	filename = filepath.Base(strings.TrimSpace(filename))
+	if filename == "" || filename == "." || filename == string(filepath.Separator) {
+		return fileResponse{}, errors.New("filename is required")
+	}
+
+	storagePath := filepath.Join(s.storageDir, storageSubdir(userID))
+	if err := os.MkdirAll(storagePath, 0o755); err != nil {
+		return fileResponse{}, fmt.Errorf("prepare storage: %w", err)
+	}
+	storedPath := filepath.Join(storagePath, uuid.New().String())
+	if err := os.WriteFile(storedPath, data, 0o644); err != nil {
+		return fileResponse{}, fmt.Errorf("write file: %w", err)
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(storedPath)
+		}
+	}()
+
+	sum := sha256.Sum256(data)
+	checksum := hex.EncodeToString(sum[:])
+	expiresAt := time.Now().UTC().Add(ttl)
+
+	var publicToken *string
+	if isPublic {
+		token := uuid.New().String()
+		publicToken = &token
+	}
+
+	rec, err := s.db.CreateFile(ctx, userID, filename, storedPath, int64(len(data)), isPublic, publicToken, expiresAt, false, nil, nil, &checksum)
+	if err != nil {
+		return fileResponse{}, fmt.Errorf("persist file metadata: %w", err)
+	}
+	cleanup = false
+
+	var publicLink *string
+	if rec.PublicToken.Valid {
+		link := fmt.Sprintf("/public/%s", rec.PublicToken.String)
+		publicLink = &link
+	}
+
+	action := "upload_file"
+	if userID == nil {
+		action = "upload_file_public"
+	}
+	auditMeta, _ := json.Marshal(map[string]any{
+		"filename":   rec.Filename,
+		"size":       rec.Size,
+		"public":     rec.IsPublic,
+		"expires_at": rec.ExpiresAt.Format(time.RFC3339),
+		"source":     "mcp",
+	})
+	s.appendAudit(ctx, userID, machine, action, fmt.Sprintf("file:%d", rec.ID), string(auditMeta))
+
+	downloadLink := fmt.Sprintf("/api/v1/files/%d", rec.ID)
+	if publicLink != nil {
+		downloadLink = *publicLink
+	}
+
+	return fileResponse{
+		ID:           rec.ID,
+		EntryType:    rec.EntryType,
+		Filename:     rec.Filename,
+		Size:         rec.Size,
+		IsPublic:     rec.IsPublic,
+		PublicLink:   publicLink,
+		UploadedAt:   rec.CreatedAt.Format(time.RFC3339),
+		ExpiresAt:    rec.ExpiresAt.Format(time.RFC3339),
+		DownloadLink: downloadLink,
+		IsEncrypted:  false,
+		Checksum:     &checksum,
 	}, nil
 }
 
@@ -269,6 +355,12 @@ func (s *Server) buildRouter() chi.Router {
 	})
 
 	r.With(xferTimeout).Get("/public/{token}", s.handlePublicDownload)
+
+	// MCP endpoint (Streamable HTTP). Uses xferTimeout (context deadline only) —
+	// never middleware.Timeout, which buffers the response body and would break
+	// the streaming transport. mcpLimiter gives anonymous-upload protection with
+	// enough headroom for the multi-request handshake.
+	r.With(s.mcpLimiter.middleware, xferTimeout).Handle("/mcp", s.mcpHandler())
 	return r
 }
 
@@ -280,11 +372,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		"public_shares":                    true,
 		"self_service_registration":        s.cfg.RegistrationEnabled,
 		"default_visibility_authenticated": "private",
-		"max_upload_size_bytes":            s.cfg.MaxUploadSizeBytes,
+		"max_upload_size_bytes":            s.maxUploadSize(),
 		"default_ttl_seconds":              int64(s.cfg.DefaultPrivateTTL.Seconds()),
 		"max_ttl_seconds":                  int64(s.cfg.MaxPrivateTTL.Seconds()),
 		"default_public_ttl_seconds":       int64(s.cfg.DefaultPublicTTL.Seconds()),
 		"max_public_ttl_seconds":           int64(s.cfg.MaxPublicTTL.Seconds()),
+		"mcp":                              true,
+		"mcp_endpoint":                     "/mcp",
 	}
 	writeJSON(w, http.StatusOK, caps)
 }
@@ -415,37 +509,54 @@ type contextKey string
 
 const userContextKey contextKey = "auth.user"
 
+// errAuthCheckFailed signals that the revocation lookup itself failed (an
+// internal error), as opposed to the token simply being absent or invalid.
+var errAuthCheckFailed = errors.New("authentication check failed")
+
+// resolveUser validates the request's bearer token and returns the
+// authenticated user. It returns (nil, nil) when no token is present so callers
+// that allow anonymous access (e.g. the MCP endpoint) can fall through, and a
+// non-nil error when a token is present but revoked/invalid. The revoked-token
+// check runs before signature verification, matching logout semantics.
+func (s *Server) resolveUser(r *http.Request) (*AuthenticatedUser, error) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, authHeaderPrefix) {
+		return nil, nil
+	}
+	token := strings.TrimPrefix(authHeader, authHeaderPrefix)
+	if revoked, err := s.db.IsTokenRevoked(r.Context(), token); err != nil {
+		return nil, errAuthCheckFailed
+	} else if revoked {
+		return nil, errors.New("token revoked")
+	}
+	claims, err := auth.ParseToken(token, s.jwtSecret)
+	if err != nil {
+		return nil, errors.New("invalid token")
+	}
+	user, err := s.db.GetUserByID(r.Context(), claims.UserID)
+	if err != nil {
+		return nil, errors.New("invalid token")
+	}
+	return &AuthenticatedUser{ID: user.ID, Username: user.Username}, nil
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authHeader, authHeaderPrefix) {
+		user, err := s.resolveUser(r)
+		if err != nil {
+			if errors.Is(err, errAuthCheckFailed) {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		if user == nil {
 			writeError(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		token := strings.TrimPrefix(authHeader, authHeaderPrefix)
-		if revoked, err := s.db.IsTokenRevoked(r.Context(), token); err != nil {
-			writeError(w, http.StatusInternalServerError, "authentication check failed")
-			return
-		} else if revoked {
-			writeError(w, http.StatusUnauthorized, "token revoked")
-			return
-		}
-		claims, err := auth.ParseToken(token, s.jwtSecret)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid token")
-			return
-		}
 
-		user, err := s.db.GetUserByID(r.Context(), claims.UserID)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid token")
-			return
-		}
-
-		ctx := context.WithValue(r.Context(), userContextKey, &AuthenticatedUser{
-			ID:       user.ID,
-			Username: user.Username,
-		})
+		ctx := context.WithValue(r.Context(), userContextKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -497,7 +608,7 @@ func (s *Server) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	upload, err := s.consumeUpload(w, r, storageSubdir(&user.ID))
 	if err != nil {
 		if isRequestTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "file exceeds 1GB limit")
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds the %d byte upload limit", s.maxUploadSize()))
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -618,7 +729,7 @@ func (s *Server) handlePublicUpload(w http.ResponseWriter, r *http.Request) {
 	upload, err := s.consumeUpload(w, r, storageSubdir(nil))
 	if err != nil {
 		if isRequestTooLarge(err) {
-			writeError(w, http.StatusRequestEntityTooLarge, "file exceeds 1GB limit")
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds the %d byte upload limit", s.maxUploadSize()))
 			return
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
