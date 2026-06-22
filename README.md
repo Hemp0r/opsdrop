@@ -113,6 +113,7 @@ The server exposes `GET /.well-known/opsdrop-capabilities` (no auth required) wh
 - `max_upload_size_bytes` (from `MAX_UPLOAD_SIZE_BYTES`)
 - `default_ttl_seconds`, `max_ttl_seconds` (private upload expiration)
 - `default_public_ttl_seconds`, `max_public_ttl_seconds` (public upload expiration)
+- `mcp`, `mcp_endpoint` (MCP tooling support and its route)
 
 The CLI fetches and caches these on `opsdrop remote set` and `opsdrop remote refresh` to improve help output and UX hints. `opsdrop remote set` requires this endpoint to respond successfully — if capabilities cannot be fetched, the new remote URL is rejected and the existing configuration is left unchanged, since a server that doesn't expose this endpoint is not a compatible OpsDrop remote.
 
@@ -217,6 +218,12 @@ opsdrop ui                                         # requires login
 ```
 
 > For development against a self-signed certificate, use `--insecure` as a global flag on any command, or persist it with `opsdrop remote set <url> --insecure`.
+
+## MCP Tooling
+
+The server exposes a [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` (Streamable HTTP) so AI agents can create drops directly. It runs inside the same server binary as the REST API. A `push` tool uploads inline content; with a bearer token the drop is private, otherwise it is an anonymous public share.
+
+See [docs/MCP.md](docs/MCP.md) for the tool schema, client configuration, and a raw protocol walkthrough.
 
 ## Auditing
 
