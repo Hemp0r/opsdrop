@@ -54,14 +54,18 @@ A goroutine started in `Server.New` runs `cleanupExpiredFiles` + `cleanupExpired
 
 ### MCP endpoint (`internal/server/mcp.go`)
 
-`GET/POST /mcp` mounts the official `github.com/modelcontextprotocol/go-sdk`
+`POST /mcp` mounts the official `github.com/modelcontextprotocol/go-sdk`
 Streamable HTTP handler onto the same chi router — single binary, no second
 process. It's wired with `xferTimeout` (context-deadline only), **never**
-`middleware.Timeout`, which would buffer and break the streaming transport. A
-fresh `mcp.Server` is built **per request** in the `getServer` closure so the
-`push` tool can bind to the caller's identity: `resolveUser(r)` (the optional-auth
-core extracted from `authMiddleware`) returns the user for a valid bearer token,
-or `(nil, nil)` for anonymous. The tool takes content **inline** (`content` or
+`middleware.Timeout`, which would buffer and break the streaming transport.
+The handler is explicitly stateless, with `GetSessionID` returning an empty
+string. Optional authentication is resolved on every HTTP request before SDK
+dispatch; invalid, expired, revoked or malformed credentials fail closed.
+A request-local `mcp.Server` binds `push` to the resolved context identity.
+Requests carrying legacy `Mcp-Session-Id` are rejected rather than downgraded to
+anonymous/public uploads; clients must reconnect without session IDs. GET returns
+405. See `docs/adr/0002-mcp-request-authentication.md` for this refinement.
+The tool takes content **inline** (`content` or
 `content_base64` + `filename`) — the server is remote and can't read a client
 path — and routes through `storeDrop`, the byte-based sibling of `consumeUpload`
 (authenticated ⇒ private/`user_N`, anonymous ⇒ public/`public` with a token).

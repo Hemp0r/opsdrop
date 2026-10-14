@@ -7,7 +7,11 @@ artifact.
 
 ## Overview
 
-- **Endpoint:** `POST/GET /mcp` on the OpsDrop server.
+- **Endpoint:** `POST /mcp` on the OpsDrop server; `GET` returns HTTP 405.
+- **Sessions:** stateless. No `Mcp-Session-Id` is issued. Requests carrying an old
+  session ID are rejected with HTTP 400; reconnect without it and send current
+  credentials on every request. Invalid, expired or revoked credentials return
+  HTTP 401 and never fall back to a public upload.
 - **Transport:** [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
   (the successor to the deprecated HTTP+SSE transport).
 - **Auth:** optional. A request carrying a valid `Authorization: Bearer <jwt>`
@@ -97,29 +101,24 @@ text/event-stream` on every request.
 ```sh
 BASE=http://localhost:8080
 
-# 1. initialize — capture the session id from the response headers
+# 1. initialize — no session id is issued
 curl -s -D - -o /dev/null \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
-  $BASE/mcp | grep -i mcp-session-id
-
-SID=<value from above>
+  $BASE/mcp
 
 # 2. complete the handshake
 curl -s -o /dev/null \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' $BASE/mcp
 
 # 3. list tools
 curl -s -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' $BASE/mcp
 
 # 4. push a drop (anonymous → public)
 curl -s -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -H "Mcp-Session-Id: $SID" \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"push","arguments":{"content":"hello from mcp","filename":"note.txt"}}}' \
   $BASE/mcp
 ```

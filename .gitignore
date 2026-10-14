@@ -14,4 +14,4 @@ logs/
 *.log
 
 /opsdrop
-server
+/server
