@@ -35,13 +35,11 @@ type pushResult struct {
 	Checksum  string `json:"checksum,omitempty" jsonschema:"sha256 checksum of the content"`
 }
 
-// mcpHandler returns the Streamable HTTP handler for the MCP endpoint. A fresh
-// server is built per request so the push tool can be bound to the caller's
-// resolved identity: a valid bearer token yields a private drop for that user,
-// otherwise the drop is anonymous and public.
+// mcpHandler uses a stateless transport: each request resolves its own identity,
+// so a session cannot retain private access after logout or token expiration.
 func (s *Server) mcpHandler() http.Handler {
 	getServer := func(r *http.Request) *mcp.Server {
-		user, authErr := s.resolveUser(r)
+		user := currentUser(r.Context())
 		machine := clientMachine(r)
 		baseURL := requestBaseURL(r)
 
@@ -49,23 +47,44 @@ func (s *Server) mcpHandler() http.Handler {
 			Name:    "opsdrop",
 			Title:   "OpsDrop",
 			Version: version.Version,
-		}, nil)
+		}, &mcp.ServerOptions{GetSessionID: func() string { return "" }})
 		mcp.AddTool(srv, &mcp.Tool{
 			Name:        "push",
 			Title:       "Push a drop",
 			Description: "Upload inline content to OpsDrop and return a shareable URL and token. With a valid bearer token the drop is private to that user; otherwise it is an anonymous public drop. Provide exactly one of content (text) or content_base64 (binary).",
-		}, s.pushTool(user, authErr, machine, baseURL))
+		}, s.pushTool(user, machine, baseURL))
 		return srv
 	}
-	return mcp.NewStreamableHTTPHandler(getServer, nil)
+	handler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{Stateless: true})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Do not silently downgrade requests carrying a legacy private session
+		// to anonymous/public uploads. Clients must reconnect without that ID.
+		if r.Header.Get("Mcp-Session-Id") != "" {
+			writeError(w, http.StatusBadRequest, "MCP sessions are not supported; reconnect without Mcp-Session-Id")
+			return
+		}
+		user, err := s.resolveUser(r)
+		if err != nil {
+			if errors.Is(err, errAuthCheckFailed) {
+				writeError(w, http.StatusInternalServerError, "authentication check failed")
+			} else {
+				writeError(w, http.StatusUnauthorized, "invalid bearer token")
+			}
+			return
+		}
+		if r.Header.Get("Authorization") != "" && user == nil {
+			writeError(w, http.StatusUnauthorized, "invalid bearer token")
+			return
+		}
+		if user != nil {
+			r = r.WithContext(context.WithValue(r.Context(), userContextKey, user))
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
-func (s *Server) pushTool(user *AuthenticatedUser, authErr error, machine, baseURL string) mcp.ToolHandlerFor[pushArgs, pushResult] {
+func (s *Server) pushTool(user *AuthenticatedUser, machine, baseURL string) mcp.ToolHandlerFor[pushArgs, pushResult] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in pushArgs) (*mcp.CallToolResult, pushResult, error) {
-		if authErr != nil {
-			return nil, pushResult{}, fmt.Errorf("authentication failed: %w", authErr)
-		}
-
 		content := in.Content
 		b64 := strings.TrimSpace(in.ContentBase64)
 		if (content == "") == (b64 == "") {
