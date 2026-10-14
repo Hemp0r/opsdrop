@@ -62,7 +62,7 @@ func ParseToken(token string, secret []byte) (*Claims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return secret, nil
-	})
+	}, jwt.WithStrictDecoding())
 	if err != nil {
 		return nil, err
 	}
