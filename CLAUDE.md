@@ -7,7 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```sh
 # Build (CGO is never needed — modernc.org/sqlite is pure Go)
 make build-cli                 # builds ./cmd/opsdrop
-make build-all                 # cross-compiles CLI into dist/
+make build-all                 # cross-compiles CLI + server for every release target into dist/
+make test                      # go vet + go test
 go build ./cmd/server          # builds the server binary
 
 # Local dev server (TLS off, behind reverse proxy or for testing)
@@ -19,12 +20,21 @@ go run ./cmd/server
 SERVER_JWT_SECRET=$(openssl rand -hex 32) docker compose up --build
 
 # Release plumbing
-make container-release         # docker build + push hemp0r/opsdrop:latest
+make container-release         # multi-arch buildx build + push hemp0r/opsdrop:latest
 make helm-release              # package + push chart/opsdrop to GHCR OCI
 ```
 
-There is no test suite — `go test ./...` returns no packages. CI is release-only
-(`.github/workflows/release-*.yml`); there is no lint/test workflow. Build-time
+Tests live in `internal/{auth,db,server}`. `.github/workflows/ci.yml` runs vet + tests
+natively on linux/amd64, linux/arm64 and macOS arm64 (Apple Silicon) and
+cross-compiles every release target. Release targets are linux/{amd64,arm64,armv7},
+darwin/{amd64,arm64}, windows/{amd64,arm64}; the list lives in both the `Makefile`
+(`PLATFORMS`) and `release-cli.yml` — keep them in sync. `release-cli.yml` runs each
+binary on matching native runners (armv7 via QEMU) before publishing, and CLI asset
+names (`opsdrop-<os>-<arch>`) are consumed by `install.sh` and the Homebrew formula,
+so don't rename them. The Homebrew tap (`hemp0r/homebrew-opsdrop`) is updated by
+`release-brew.yml`, a reusable workflow called from `release-cli.yml` after the release
+exists (stable tags only); it renders `Formula/opsdrop.rb` by replacing `${VERSION}`/
+`${SHA256_*}` placeholders. Build-time
 version metadata is injected via `-ldflags "-X opsdrop/internal/version.{Version,Commit,Date}=..."`.
 
 ## Architecture
