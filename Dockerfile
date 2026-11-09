@@ -1,10 +1,11 @@
 ############################
 # Build stage
 ############################
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG TARGETVARIANT
 
 WORKDIR /src
 
@@ -20,12 +21,13 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
 
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
-    -ldflags "-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}" \
-    -o /out/opsdrop-server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
-    -ldflags "-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}" \
-    -o /out/opsdrop ./cmd/opsdrop
+# Cross-compile natively on the build host (no QEMU needed for Go). GOARM is
+# only meaningful for 32-bit ARM (linux/arm/v6, linux/arm/v7).
+RUN set -eu; \
+    if [ "$TARGETARCH" = "arm" ]; then export GOARM="${TARGETVARIANT#v}"; fi; \
+    LDFLAGS="-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}"; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "$LDFLAGS" -o /out/opsdrop-server ./cmd/server; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "$LDFLAGS" -o /out/opsdrop ./cmd/opsdrop
 
 ############################
 # Runtime stage

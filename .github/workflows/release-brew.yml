@@ -1,56 +1,58 @@
 name: Release Homebrew
 
+# Called by release-cli.yml once the GitHub release and its assets exist, so
+# there is no race with the binary build. Can also be run by hand to re-sync
+# the tap for an existing tag.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish to the tap (e.g. v1.2.3)
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_TAP_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish to the tap (e.g. v1.2.3)
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   update-tap:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Wait for release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          echo "Waiting for release assets for ${TAG}..."
-          for i in $(seq 1 30); do
-            ASSETS=$(gh release view "${TAG}" --json assets -q '.assets[].name' 2>/dev/null || true)
-            if echo "${ASSETS}" | grep -q "opsdrop-darwin-arm64" && \
-               echo "${ASSETS}" | grep -q "opsdrop-darwin-amd64" && \
-               echo "${ASSETS}" | grep -q "opsdrop-linux-amd64" && \
-               echo "${ASSETS}" | grep -q "opsdrop-linux-arm64"; then
-              echo "All assets found."
-              break
-            fi
-            echo "Assets not ready yet, retrying in 15s... (attempt ${i}/30)"
-            sleep 15
-          done
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Download release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           mkdir -p dist
-          gh release download "${TAG}" -p "opsdrop-darwin-arm64" -D dist/
-          gh release download "${TAG}" -p "opsdrop-darwin-amd64" -D dist/
-          gh release download "${TAG}" -p "opsdrop-linux-amd64" -D dist/
-          gh release download "${TAG}" -p "opsdrop-linux-arm64" -D dist/
+          for a in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+            gh release download "${TAG}" -R "${GITHUB_REPOSITORY}" -p "opsdrop-${a}" -D dist/
+          done
 
       - name: Compute SHA256 checksums
         id: sha
         run: |
-          echo "darwin_arm64=$(sha256sum dist/opsdrop-darwin-arm64 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "darwin_amd64=$(sha256sum dist/opsdrop-darwin-amd64 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "linux_amd64=$(sha256sum dist/opsdrop-linux-amd64 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
-          echo "linux_arm64=$(sha256sum dist/opsdrop-linux-arm64 | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          for a in darwin_arm64 darwin_amd64 linux_amd64 linux_arm64; do
+            echo "${a}=$(sha256sum "dist/opsdrop-${a/_/-}" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          done
 
       - name: Generate formula
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG#v}"
           sed \
             -e "s/\${VERSION}/${VERSION}/g" \
             -e "s/\${SHA256_DARWIN_ARM64}/${{ steps.sha.outputs.darwin_arm64 }}/g" \
@@ -58,12 +60,18 @@ jobs:
             -e "s/\${SHA256_LINUX_AMD64}/${{ steps.sha.outputs.linux_amd64 }}/g" \
             -e "s/\${SHA256_LINUX_ARM64}/${{ steps.sha.outputs.linux_arm64 }}/g" \
             Formula/opsdrop.rb > opsdrop.rb
+          if grep -q '\${' opsdrop.rb; then
+            echo "Unreplaced placeholder in generated formula" >&2
+            exit 1
+          fi
+          cat opsdrop.rb
 
       - name: Push to Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ inputs.tag }}
         run: |
-          git clone https://x-access-token:${TAP_TOKEN}@github.com/hemp0r/homebrew-opsdrop.git tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/hemp0r/homebrew-opsdrop.git" tap
           mkdir -p tap/Formula
           cp opsdrop.rb tap/Formula/opsdrop.rb
           cd tap
@@ -71,5 +79,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/opsdrop.rb
           git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Update opsdrop to ${GITHUB_REF_NAME}"
+          git commit -m "Update opsdrop to ${TAG}"
           git push

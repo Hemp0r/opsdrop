@@ -1,4 +1,4 @@
-name: Release CLI
+name: Release Binaries
 
 on:
   push:
@@ -13,70 +13,127 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Pure-Go (CGO_ENABLED=0, modernc.org/sqlite) so every target is
+        # cross-compiled from one Linux runner. Keep in sync with the Makefile.
         include:
-          - goos: linux
-            goarch: amd64
-            suffix: linux-amd64
-          - goos: linux
-            goarch: arm64
-            suffix: linux-arm64
-          - goos: darwin
-            goarch: amd64
-            suffix: darwin-amd64
-          - goos: darwin
-            goarch: arm64
-            suffix: darwin-arm64
-          - goos: windows
-            goarch: amd64
-            suffix: windows-amd64.exe
-          - goos: windows
-            goarch: arm64
-            suffix: windows-arm64.exe
+          - { goos: linux,   goarch: amd64, target: linux-amd64 }
+          - { goos: linux,   goarch: arm64, target: linux-arm64 }
+          - { goos: linux,   goarch: arm,   target: linux-armv7, goarm: "7" }
+          - { goos: darwin,  goarch: amd64, target: darwin-amd64 }
+          - { goos: darwin,  goarch: arm64, target: darwin-arm64 }
+          - { goos: windows, goarch: amd64, target: windows-amd64, ext: .exe }
+          - { goos: windows, goarch: arm64, target: windows-arm64, ext: .exe }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/go/pkg/mod
           key: gomod-${{ hashFiles('go.sum') }}
 
       - name: Cache Go build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build
-          key: gobuild-${{ matrix.goos }}-${{ matrix.goarch }}-${{ hashFiles('go.sum') }}
+          key: gobuild-${{ matrix.target }}-${{ hashFiles('go.sum') }}
           restore-keys: |
-            gobuild-${{ matrix.goos }}-${{ matrix.goarch }}-
+            gobuild-${{ matrix.target }}-
 
-      - name: Build
+      - name: Build CLI and server
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
         run: |
           VERSION="${GITHUB_REF_NAME}"
           COMMIT="${GITHUB_SHA::7}"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           LDFLAGS="-X opsdrop/internal/version.Version=${VERSION} -X opsdrop/internal/version.Commit=${COMMIT} -X opsdrop/internal/version.Date=${DATE}"
-          go build -ldflags "${LDFLAGS}" -o dist/opsdrop-${{ matrix.suffix }} ./cmd/opsdrop/
+          go build -ldflags "${LDFLAGS}" -o "dist/opsdrop-${{ matrix.target }}${{ matrix.ext }}" ./cmd/opsdrop/
+          go build -ldflags "${LDFLAGS}" -o "dist/opsdrop-server-${{ matrix.target }}${{ matrix.ext }}" ./cmd/server/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
-          name: opsdrop-${{ matrix.suffix }}
-          path: dist/opsdrop-${{ matrix.suffix }}
+          name: opsdrop-${{ matrix.target }}
+          path: dist/*
+
+  # Run every binary on real hardware for its architecture (including Apple
+  # Silicon) before anything is published. armv7 runs under QEMU.
+  verify:
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    target: linux-amd64 }
+          - { runner: ubuntu-24.04-arm, target: linux-arm64 }
+          - { runner: ubuntu-latest,    target: linux-armv7, emulator: qemu-arm-static }
+          - { runner: macos-latest,     target: darwin-arm64 }
+          - { runner: macos-15-intel,   target: darwin-amd64 }
+          - { runner: windows-latest,   target: windows-amd64, ext: .exe }
+          - { runner: windows-11-arm,   target: windows-arm64, ext: .exe }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: opsdrop-${{ matrix.target }}
+          path: dist
+
+      - name: Install QEMU user-mode emulation
+        if: matrix.emulator != ''
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+
+      - name: Check macOS code signature
+        if: runner.os == 'macOS'
+        run: |
+          # arm64 macOS refuses to execute unsigned binaries; Go ad-hoc signs them.
+          codesign --verify --verbose dist/opsdrop-${{ matrix.target }}
+          codesign --verify --verbose dist/opsdrop-server-${{ matrix.target }}
+
+      - name: Smoke test CLI
+        run: |
+          chmod +x dist/* || true
+          out="$(${{ matrix.emulator }} ./dist/opsdrop-${{ matrix.target }}${{ matrix.ext }} --version)"
+          echo "${out}"
+          echo "${out}" | grep -q "opsdrop version ${GITHUB_REF_NAME}"
+
+      - name: Smoke test server (SQLite + HTTP)
+        if: runner.os != 'Windows'
+        run: |
+          tmp="$(mktemp -d)"
+          SERVER_JWT_SECRET="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" \
+          SERVER_TLS_ENABLED=false \
+          SERVER_ADDRESS=127.0.0.1:18080 \
+          SERVER_DATABASE="${tmp}/server.db" \
+          SERVER_STORAGE_DIR="${tmp}/storage" \
+            ${{ matrix.emulator }} ./dist/opsdrop-server-${{ matrix.target }} > "${tmp}/server.log" 2>&1 &
+          pid=$!
+          ok=""
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/.well-known/opsdrop-capabilities; then ok=1; break; fi
+            sleep 1
+          done
+          kill "${pid}" 2>/dev/null || true
+          cat "${tmp}/server.log"
+          test -n "${ok}"
+          grep -q "OpsDrop server version ${GITHUB_REF_NAME}" "${tmp}/server.log"
 
   release:
-    needs: build
+    needs: [build, verify]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -86,9 +143,19 @@ jobs:
         run: sha256sum opsdrop-* > checksums.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
             dist/opsdrop-*
             dist/checksums.txt
+
+  # Stable tags only: pre-releases (v1.2.3-beta1) are not pushed to the tap.
+  homebrew:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/release-brew.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -59,9 +59,30 @@ wget -qO- https://raw.githubusercontent.com/Hemp0r/opsdrop/refs/heads/main/insta
 ### Via Homebrew
 
 ```sh
-brew tap hemp0r/opsdrop
-brew install opsdrop
+brew install hemp0r/opsdrop/opsdrop
 ```
+
+Works on Apple Silicon and Intel Macs and on Linux (amd64/arm64), and installs
+bash/zsh/fish completions. Homebrew 7+ only loads formulae from third-party taps
+you trust; installing by the fully-qualified name above trusts it automatically.
+If you tapped first (`brew tap hemp0r/opsdrop`), run `brew trust hemp0r/opsdrop`
+before `brew install opsdrop`.
+
+### Supported platforms
+
+Every [release](https://github.com/Hemp0r/opsdrop/releases) ships standalone CLI
+(`opsdrop-<os>-<arch>`) and server (`opsdrop-server-<os>-<arch>`) binaries plus
+`checksums.txt`:
+
+| OS      | amd64 | arm64                    | armv7 (32-bit)  |
+|---------|-------|--------------------------|-----------------|
+| macOS   | ✓     | ✓ (Apple Silicon)        |                 |
+| Linux   | ✓     | ✓ (Graviton, Pi 4/5, …)  | ✓ (Raspberry Pi) |
+| Windows | ✓     | ✓                        |                 |
+
+The server container image (`hemp0r/opsdrop`, `ghcr.io/hemp0r/opsdrop`) is
+published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`, so it runs
+natively under Docker Desktop on Apple Silicon.
 
 ---
 
