@@ -76,7 +76,7 @@ jobs:
         include:
           - { runner: ubuntu-latest,    target: linux-amd64 }
           - { runner: ubuntu-24.04-arm, target: linux-arm64 }
-          - { runner: ubuntu-latest,    target: linux-armv7, emulator: qemu-arm-static }
+          - { runner: ubuntu-latest,    target: linux-armv7, emulator: qemu-arm }
           - { runner: macos-latest,     target: darwin-arm64 }
           - { runner: macos-15-intel,   target: darwin-amd64 }
           - { runner: windows-latest,   target: windows-amd64, ext: .exe }
@@ -92,12 +92,14 @@ jobs:
 
       - name: Install QEMU user-mode emulation
         if: matrix.emulator != ''
-        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+        # Ubuntu 26.04+ ships qemu-arm in qemu-user (qemu-user-static is gone).
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
 
       - name: Check macOS code signature
-        if: runner.os == 'macOS'
+        # Only arm64 macOS requires a signature, so Go only ad-hoc signs
+        # darwin/arm64; darwin/amd64 binaries are unsigned by design.
+        if: matrix.target == 'darwin-arm64'
         run: |
-          # arm64 macOS refuses to execute unsigned binaries; Go ad-hoc signs them.
           codesign --verify --verbose dist/opsdrop-${{ matrix.target }}
           codesign --verify --verbose dist/opsdrop-server-${{ matrix.target }}
 
